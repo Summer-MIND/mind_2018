@@ -1,0 +1,470 @@
+---
+title: "Representational similarity analysis (MIND 2018)"
+author: "Mark A. Thornton, Ph. D."
+date: "August 1, 2018"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction to RSA
+
+Representational similarity analysis (RSA) is statistical technique based on analyzing second-order isomorphisms. That rather than directly analyzing the relationship between one measure and another, RSA instead computes some measure of similarity within each measure and then compares these similarities to each other. RSA was pioneered by [Kriegeskorte, Mur, and Bandettini (2008, Frontiers in System Neuroscience)](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2605405/) and has since become a popular method for analyzing neuroimaging data. Much of this popularity is driven by the fact that - because RSA focuses on second-order isomorphisms (i.e., similarities) - it is an incredibly flexible analytic technique, capable linking disparate measures of brain and behavior.
+
+![Kriegeskorte, Mur, and Bandettini (2008)](http://www.mrc-cbu.cam.ac.uk//personal/nikolaus.kriegeskorte/fig5_kriegeskorte_RSA_FNS.gif)
+
+In the context of fMRI, RSA usually takes the form of a correlation or regression between neural pattern similarity and a task, rating, or model. In this tutorial we will learn how to conduct these confirmatory RSAs as well as how
+to perform complementary exploratory analyses.
+
+## How to measure similarity?
+
+There are many ways to measure the similarity (or distance) between data objects. While the nature of the data in question partially constrains which metrics are appropriate, often we are still left with a choice of several different distance metrics for measuring a space. This section will explore distance metrics with the aim of building intuition for how to make such choices.
+
+The most common distance metrics used to measure similarity in fMRI data are mean distance, Euclidean distance, and correlation distance. In this section, we will simulate some data to illustrate the relationships between these difference metrics.
+
+
+
+```{r, echo=F, results="hide", include=F}
+# load packages
+if(!require(MASS)) install.packages("MASS"); require(MASS)
+if(!require(lattice)) install.packages("lattice"); require(lattice)
+if(!require(rasterVis)) install.packages("rasterVis"); require(rasterVis)
+if(!require(psych)) install.packages("psych"); require(psych)
+if(!require(pracma)) install.packages("pracma"); require(pracma)
+if(!require(nnls)) install.packages("nnls"); require(nnls)
+if(!require(smacof)) install.packages("smacof"); require(smacof)
+if(!require(Rtsne)) install.packages("Rtsne"); require(Rtsne)
+```
+
+```{r}
+# data generation
+set.seed(1)
+sigmat <- matrix(c(1,0,.8,0,0,1,0,.8,.8,0,1,0,0,.8,0,1),nrow=4)
+dat <- mvrnorm(200,c(0,0,1,1),Sigma = sigmat)
+
+# plot data
+layout(matrix(1:4,2,2))
+for (i in 1:4){
+  plot(dat[,i],type="o",pch=20,ylim=c(-4,4),ylab="Activity",xlab=paste("Condition",as.character(i)))
+}
+
+```
+
+The data we've simulated here isn't particularly realistic, but it is ideally suited to display the differences between the three distance metrics in question. You can think of each of the four variables as the mean activity
+in a given condition in an fMRI experiment, across a 200 voxel region.
+
+### Mean distance
+We'll begin by calculating mean distance - which is simply the differences in means between the four conditions. This metric discards any information in the pattern across voxels, and is most similar to a standard univariate fMRI analysis. The bar graph and heatmap below illustrate how these means differ.
+
+```{r}
+# mean distance
+cmeans<-apply(dat,2,mean) # calculate means of each variable (object)
+barplot(cmeans) # plot means
+dmat1<-as.matrix(dist(cmeans)) # calculate distance between means
+levelplot(dmat1) # heatmap of distances
+```
+
+### Euclidean distance
+Next we'll examine Euclidean distance. This distance corresponds to the "real" distance we use most frequently in our everyday lives. The twist is that, instead of the familiar 3-D space we all inhabit, here we're calculating Euclidean distance in an N-dimensional space, where N = # of voxels (in this case, 200). The heatmap and scatter plot matrix below illustrates the Euclidean distance between the four conditions.
+
+```{r}
+# Euclidean distance
+dmat2 <- as.matrix(dist(t(dat)))
+levelplot(dmat2)
+pairs(dat)
+```
+
+### Correlation distance
+Correlation distance is perhaps the most common metric used in fMRI analysis. This metric discards the mean completely (data are implicitly z-scores prior to correlation, or else it's just covariance) so all information comes from the pattern instead. Since correlation is naturally a similarity rather than dissimilarity measure, the  "distance" part is basically just a sign flip: 1-R. Again, the heatmap illustrates the results.
+
+```{r}
+# correlation distance
+dmat3 <- 1-cor(dat)
+levelplot(dmat3)
+```
+
+### Comparing distance metrics
+Now let's put these three distance metrics together. In the heatmaps below, you can see the lawful relationship between the three: mean and correlation distance are completely orthogonal to each other, but both "contribute" to the Euclidean distance. Correlation distance tends to be preferred because RSA (and MVPA in general) is often done in direct contrast to univariate analyses. Since the univariate analyses already reflect mean distance, it makes sense to over orthogonal information using correlation distance when doing RSA. However, if you're simply seeking an agnostic measure of neural similarity, and don't particularly care whether it is drive by the mean or the pattern, Euclidean distance might be a good bet.
+
+```{r}
+# combined plot
+dmat2<-dmat2/max(dmat2)
+rlist <- list(raster(dmat1),raster(dmat2),raster(dmat3))
+names(rlist)<-c("Mean","Euclidean","Correlation")
+levelplot(stack(rlist),layout=c(3,1),at=seq(0,1,.01))
+
+```
+
+Does this result mean that measuring neural similarity with correlations allows you to completely remove univariate signal from your results? Unfortunately not. In this toy example, we knew the exact borders of our region of interest. In reality, it will never be that clean: activity/patterns will be aliased with respect to your feature selection. For example, imagine that there is a single active blob in your data, but your region of interest is a bit too big and therefor the blob only fills 80% of the ROI. The remaining 20% of voxels will not change their activity across conditions. In the process, the difference between these two populations of voxels will induce correlations - as well as just mean activity differences - across conditions. Again, this might not matter depending on the conclusion you want to draw, but if your conclusion relies heavily on the results not being driven by univariate signal, this is bad news.
+
+## RSA: NHST, effect sizes, cross-validation, and model selection
+
+In this section, we will introduce RSA proper, and deal with some core issues surrounding it. In particular, we will examine how to test the significance of RSA results at the item-analysis and group levels. We will also hear a couple caveats about RSA effect sizes, and learn how to perform cross-validation and model selection.
+
+Instead of the toy data used above, for this section we will turn to real fMRI, rating, and text data from a previous study: [Thornton & Mitchell, 2017, Cerebral Cortex](http://markallenthornton.com/cv/Thornton&Mitchell_CC_2017.pdf). In this study, participants performed a social judgment task in which they mentalized about 60 famous people. On each trial, participants would judgment how well a particular statement, such as "would like to learn karate," would apply to a particular target person, such as Bill Nye. This procedure repeated across the course of the study, fully crossing the 60 targets with 12 items. After preprocessing, the GLM was used to average across all trials featuring the same target person. The resulting regression coefficient patterns were z-scored by voxel to remove the influence of the global background pattern, and then correlated with each other to estimate their similarity. That's where we start.
+
+
+![Regions of reliability target person-related activity, within which we analyze patterns](http://markallenthornton.com/images/pmap.png)
+
+First, we'll read in the estimates of neural pattern similarity we want to predict. These data consist of vectorized (lower-triangular)
+correlation matrices between z-scored patterns within the set of voxels in the figure above.
+
+```{r}
+# load neural data
+ndat <- read.csv("neural_pattern_similarity.csv")
+dim(ndat)
+
+# average:
+nsim <- rowMeans(scale(ndat))
+```
+
+Next we'll load in a set of trait dimensions on which separate participants rated the famous target people:
+
+```{r fig.height=10, fig.width=8}
+
+# read in dimensions
+pdims <- read.csv("dimensions.csv")
+pnames <- as.character(pdims$name)
+pdims <- scale(pdims[,2:14])
+rownames(pdims)<-pnames
+levelplot(t(pdims),xlab="",ylab="",scales=list(x=list(rot=45)))
+```
+
+
+Finally, we'll read in some holistic similarity measures: explicit ratings of the pairwise similarity between target people, and 
+a measure of textual similarity derived from taking a bag-of-words approach to the target people's Wikipedia pages. These have been
+reverse-coded (i.e., as distances) so we'll flip their signs to make them similarities again.
+```{r}
+holdists <- read.csv("holdists.csv")
+explicit <- 100-holdists$holistic
+text <- 2-holdists$text
+
+```
+
+### Our first RSA!
+
+Now that we have the requisite data load into R, let's run our first RSA analysis. This will consist of a simple correlation between the average neural pattern similarity and explicit ratings of interpersonal similarity.
+
+```{r fig.height=7, fig.width=7}
+cor(nsim,explicit)
+plot(explicit,nsim,xlab="Rated similarity",ylab="Neural similarity",pch=20)
+abline(lm(nsim~explicit),col="red",lwd=2)
+
+```
+
+As you can see, there's a fairly substantial correlation between how similar MTurkers think famous people are to each other, and similarity between patterns of brain activity elicited by mentalizing about those people. The Pearson correlation between the two values is r = 0.4. (I'll note in passing that Kriegeskorte and colleagues recommend using Spearman correlations instead of Pearson. Their reasoning is sound, but I've never seen this make a substantial difference in practice.)
+
+```{r}
+cor(nsim,explicit,method = "spearman")
+
+```
+
+### Null hypothesis significance testing
+
+How can we tell if this correlation is statistically significant? A parametric correlation test assumes that every observation is independent, and will thus give us a fixed-effects p-value.
+
+```{r}
+cor.test(nsim,explicit)
+```
+
+We can see that the results of this test are wildly significant (i.e., p = 0 to within machine precision). However, if are stimuli are just s small sample from a large population, we may want a p-value that reflects the dependencies in the similarity matrices. To achieve this, we can instead use a permutation test. As with any permutation test, it is important that we permute at the level of independent observations. In this case, that means permuting the rows and columns of one of our similarity matrices with respect to the other.
+
+```{r}
+# turn vectorized neural similiarity matrix back into a matrix
+sqnsim <- squareform(nsim)
+
+# set random seed for reproducible results
+set.seed(1)
+nperm <- 5000 # set permutation count
+nppl <- dim(sqnsim)[1] # number of target people
+permcor <- rep(NA,nperm) # preallocate results
+for (i in 1:nperm){
+  sel <- sample(nppl) # permutation vector
+  rnsim <- squareform(sqnsim[sel,sel]) # permute matrix and re-vectorize neural similarity
+  permcor[i] <- cor(rnsim,explicit) # calculate permuted correlation
+}
+
+# calculate p-value
+mean(abs(permcor) > cor(nsim,explicit))
+
+# visualize
+hist(abs(permcor),xlim=c(0,.4),main="Permuted null versus actual correlation")
+abline(v=cor(nsim,explicit),col="red",lwd=2)
+
+```
+
+As you can see, in this instance our permutation results remain the same (p effectively = 0) as in the parametric case, but bear in mind that this will not always be the case! 
+
+Permutation testing resolved the issue of dependency within the similarity matrix, but the correlation we're examining is still effectively an item-analysis (since we averaged neural similarity across participants). Thus, the p-value we obtain above doesn't strictly-speaking license inference to other samples of participants, only to other samples of famous targets. To say something more general about social perceivers, we must conduct a random effect analysis. The easiest way to do this is by taking the summary statistic approach.
+
+```{r}
+# correlate explicit ratings with each imaging participant's neural similarity
+ncors <- cor(explicit,ndat)
+
+# parametric one-sample t-test (note use of Fisherized correlations)
+t.test(atanh(ncors))
+```
+
+In the code above, we correlated each imaging participant's neural similarity with the explicit ratings. We then computed a one-sample t-test on the resulting correlation coefficients to determine if the average was greater than zero. Note that correlation coefficients have a nonlinear, non-normal distribution, and thus should be normalized via Fisher's z transformation (hyperbolic arctangent) prior to any parametric tests. We can also compute a non-parametric alternative via bootstrapping (below), in which case this transformation is not critical to obtaining valid NHST.
+
+```{r}
+# bootstrap 95% CI
+bootres <- replicate(5000,mean(sample(ncors,length(ncors),T)))
+quantile(bootres,c(.025,.975))
+
+# visualize result
+plot(1:29,sort(ncors),xlab="Participant (sorted)",ylab="Correlation (r)",
+     pch=20,xlim=c(1,30))
+points(30,mean(ncors),col="red",cex=2,pch=20)
+segments(30,quantile(bootres,.975),30,quantile(bootres,.025),col="red",lwd=2)
+abline(h=0)
+```
+
+Note that the correlation is greater than zero for all but one participant in this data set, so formal NHST is scarcely necessary to reject the null hypothesis. 
+
+Although analyzing data at the group level permits inference to the population, the best possible NHST setup would involve accounting for both participant and item random effects (both intercepts and slopes for all predictors). Unfortunately, due to the complexity of the random effects structure resulting from similarity matrices, the ideal maximal mixed effects model will very rarely converge. As a result, it's effectively impossible to get the correct NHST value for most RSAs. However, there are a few alternatives. One possibility is [prevalence-based inference](https://arxiv.org/abs/1512.00810). Another option is to switch over to Bayesian statistics, since Bayesian mixed effects models can often be made to converge when (Re)ML models won't. These options are beyond the scope of this tutorial, but later we will look at one other option to mitigate this issue: cross-validation.
+
+### Effect sizes
+
+Effect sizes in RSA are relatively straight-forward. For item-level analyses like the first one we examined, the effect size is simply the correlation between the two similarity measures. However, it's worth bearing in mind the reliability of your measures when you do so. Neural data can often be quite noisy, and this can make it appear as if the association between neural similarity and another measure is smaller than it really is. One way to deal with this is through correlation disattenuation:
+
+```{r}
+# compute raw correlation
+cor(nsim,explicit)
+# compute inter-participant Cronbach's alpha for neural data
+rel <- alpha(ndat)
+# standardized alpha
+rel$total$std.alpha
+# compute disattenuated correlation
+cor(nsim,explicit)/sqrt(rel$total$std.alpha)
+```
+
+In this example, the correlation between neural and explicit similarity increased from 0.4 to 0.56 when we adjusted for the mediocre reliability of the neural data. The same could be done for the ratings, if we had the individual participant data from which to calculate its reliability. Note only the raw correlation should be used for NHST purposes. Also, remember that the reliability we calculated is only an estimate of the true variance in the data. When that estimate itself is noisy (e.g., with small samples) it clean lead to nonsensical results, like correlations greater than one. Thus, although this approach can be helpful, it should be applied with caution.
+
+There is another reason besides reliability why RSA correlations might be smaller than they should be: converting raw data into a similarity matrix inherently discards information. As a result, on average an RSA correlation will be the square-root of the correlation in the underlying dimensions used to create the similarity matrices.
+
+![](http://markallenthornton.com/images/rsacor.png)
+
+If you care about variance-explained in similarities themselves, then this isn't really a problem. However, if you care more about variance in the variables underlying your similarity estimates, you could arguably improve you effect size estimates by taking the square root of the RSA correlations you obtain.
+
+#### Group level effect sizes
+
+At the group level, we can calculate familiar test-statistics like Cohen's d.
+
+```{r}
+# Compute Cohen's d
+mean(atanh(ncors))/sd(atanh(ncors))
+```
+
+Here, for instance, we can see that the Cohen's d for the association between explicit similarity ratings and neural similarity is 2.16. The standard rule of thumb for Cohen's d states that a "large effect" is 0.8, so at 250%+ of that, we've got a whopper here!
+
+It's also possible to estimate a wide-range of other standardized effect size measures in the context of RSAs based multiple regressions or mixed effects models. However, those measures aren't RSA-specific, so won't consider them here.
+
+### Cross-validation
+
+Significance testing offers some nice hypothetical guarantees about inference to a population. However, cross-validation offers a much more concrete way of assessing how well your model can actually predict new data. In cross-validation, a model is trained on some subset of data, and then tested on left-out data, iteratively treating each subset as test and training set. Let's conduct a cross-validated multiple regression RSA, predicting neural similarity from explicit ratings and text!
+
+```{r fig.height=7, fig.width=7}
+# plot item-level scatterplot matrix
+pairs(data.frame(neural=nsim,explicit,text),pch=20)
+
+# rescale neural similarities to positive values
+ndatp <- ndat-min(ndat)
+
+# conduct leave-one-participant-out cross-validation
+xvars <- cbind(1,explicit,text)
+nsub <- dim(ndat)[2]
+cvperf <- rep(NA,nsub)
+for (i in 1:nsub){
+  fit <- nnls(xvars,rowMeans(ndatp[,-i])) # fit using non-negative least squares
+  cvperf[i] <- cor(fit$fitted,ndatp[,i])
+}
+mean(cvperf)
+
+```
+Here we can see that together, these two predictors can achieve a cross-validated performance of r = .11. Note that there are many other measures for assessing such performance, such as RMSE (root-mean-square-error), but correlation is a relatively interpretable choice. However, how can we contextual this performance? An r = .11 is obviously not great in absolute terms, but what's the best we could have done? We can answer this by calculating a noise ceiling. In this context, that simply means the average correlation between each participant and the average of the other participants.
+
+```{r fig.height=7, fig.width=7}
+noise <- rep(NA,nsub)
+for (i in 1:nsub){
+  noise[i] <- cor(ndat[,i],rowMeans(ndat[,-i]))
+}
+mean(noise) # noise ceiling
+mean(cvperf)/mean(noise) # performance as fraction of noise ceiling
+```
+
+The noise ceiling for this data is only r = 0.129. This means that, given the amount of heterogeneity between participants, even a hypothetical perfect model couldn't do better than r = 0.129. If we divide our actual performance by the noise ceiling, we can see that together, explicit ratings and textual similarity achieve 86% of the performance of a perfect theory. Although the calculations are somewhat different due to the cross-validation, you might realize that what we've just done is conceptually the same as the correlation disattenuation we performed earlier. Thus, although noise ceilings can be helpful, they should be interpreted with a grain of salt because they are only estimates and they carry their own assumptions with them. For instance, in the example above, we're implicitly assuming that all meaningful variance is at the group level (i.e., there are no meaningful idiosyncrasies), which is almost certainly not true. 
+
+More generally, using different cross-validation schemes can be very useful for estimating generalization across different "boundaries" in your data. In the example above, we only cross-validated with respect to participants, but in the case below, we also cross-validate with respect to mental states.
+
+```{r}
+
+# define function to translate vector selector to matrix selector and vectorize
+rsasel <- function(selvec){
+  nobj <- length(selvec)
+  selmat <- matrix(F,nobj,nobj)
+  selmat[selvec,selvec] <- T
+  diag(selmat)<-0
+  return(squareform(selmat))
+}
+
+
+# split data by target people
+set.seed(1)
+targsel <- sample(c(rep(T,30),rep(F,30)))
+targsel1 <- rsasel(targsel)==1
+targsel2 <- rsasel(!targsel)==1
+ndatp1 <- ndatp[targsel1,]
+ndatp2 <- ndatp[targsel2,]
+xvars <- cbind(1,explicit,text)
+xvars1 <- xvars[targsel1,]
+xvars2 <- xvars[targsel2,]
+  
+  
+# conduct leave-one-participant-out and split-half-by-target cross-validation 
+nsub <- dim(ndat)[2]
+cvperf <- matrix(NA,nsub,2)
+for (i in 1:nsub){
+  fit <- nnls(xvars1,rowMeans(ndatp1[,-i]))
+  cvperf[i,1] <- cor(xvars2 %*% fit$x,ndatp2[,i])
+  fit <- nnls(xvars2,rowMeans(ndatp2[,-i]))
+  cvperf[i,2] <- cor(xvars1 %*% fit$x,ndatp1[,i])
+}
+mean(cvperf)
+
+```
+
+The performance of the model dropped to r = .108 (vs r = .111) when we ask it to generalize to a new set of target people. However, this is a very slightly reduction in performance, suggesting that this model could potentially generalize quite well to new target people. In practice, we should probably repeat the process above multiple times with different split halves (or another cross-validation scheme) to ensure that the results we see aren't a fluke. Note that cross-validation can thus give us an answer which is difficult to obtain through significance testing (since, as discussed previously, it can be difficult to get a maximal mixed effects model to converge for such data).
+
+### Model selection
+
+In the examples so far, we've worked with models that have only one or two predictors. In many studies, researchers try to explain neural similarity using many more dimensions. As models get more complex, how can we tell when we have the best RSA model to explain brain activity? Model selection is not a unique problem for RSA, but it is an important one. There are many good ways to pick the best set of dimensions for a regression model. Traditional methods include stepwise and best subset regression. However, here we'll give an example of a simple exhaustive search through a relatively small set of dimensions.
+
+Among the various predictors we asked participants to rate famous people on are the cardinal dimensions of the Big 5: openness, conscientiousness, extraversion, agreeableness, and neuroticism. What combination of these five predictors is best for explaining
+the neural pattern similarity between representations of famous people?
+
+```{r}
+# select appropriate dimensions from rating matrix
+big5 <- pdims[,c(2,5,8,10,11)]
+big5d <- -apply(big5,2,dist) # convert to distances and sign flip
+big5d <- big5d - min(big5d) # ensure positivity
+
+# enumerate all possible combinations
+b5combs <- list()
+ind <- 1
+for (i in 1:5){
+  ccombs <- combn(5,i)
+  for (j in 1:dim(ccombs)[2]){
+    b5combs[[ind]] <- ccombs[,j]
+    ind <- ind + 1
+  }
+}
+
+# cycle through combinations, with LOO-CV
+nc <- length(b5combs)
+perf <- matrix(NA,nc,nsub)
+for (i in 1:nc){
+  xvars <- cbind(1,big5d[,b5combs[[i]]])
+  for (j in 1:nsub){
+    fit <- nnls(xvars,rowMeans(ndatp[,-j])) # fit using non-negative least squares
+    perf[i,j] <- cor(fit$fitted,ndatp[,j])
+  }
+}
+# calculate model with best performance
+mperf <- rowMeans(perf)
+colnames(big5)[b5combs[[which(mperf==max(mperf))[1]]]]
+
+```
+
+The best model consists of just 3 of the Big 5: openness, conscientousness, and extraversion. In practice, if we wanted to then assess the performance of this model (e.g., relativel to the noise ceiling), we would be well-advised to separate the model selection and evaluation steps. In this case, we were only examining 31 possible models (combinations of 5 variables) but the space of possible models grows very rapidly as the number of possible predictors increases. This means that with just a few more dimensions, we would be at serious risk of overfitting by model selection (rather than the typical case of model selection via parameter estimation). Using independent data for model selection and evaluation mitigates this risk.
+
+## Exploration and visualization
+
+So far we have mainly examined representational similarity from a confirmatory perspsective: trying to fit particular models to the observed neural data. However, exploratory analysis - including data visualization - is essential to complement these confirmatory approaches. In this section we will explore several important exploratory and visualization techniques.
+
+### Multidimensional scaling
+
+Multidimensional scaling (MDS) is one of the most powerful techniques for visualizing and exploring similarity data. The basic idea is to take a distance matrix and use it to reconstruct a configuration of points that embody those distances as accurately as possible within an N-dimensional space. In practice, N usually is 2 (sometimes 3) since this makes the results easy to visualize. There are many implementations in R, but we'll be using the smacof package.
+
+#### Trival example: airline distances between French cities
+
+```{r fig.height=8, fig.width=8}
+layout(mat=matrix(1))
+mdfit <- smacofSym(Guerry,2)
+plot(mdfit) # a reconstructed map of France!
+```
+Note that the orientation of an MDS plot is arbitrary: this is one of the major limitations of the method. However, different configurations can be rotated into the same orientation via Procrutes algorithm.
+
+#### MDS on neural pattern similarity
+Now that we've seen how MDS works, let's apply it to our fMRI data.
+```{r fig.height=8, fig.width=8}
+# name similarity matrix for plotting
+rownames(sqnsim) <- pnames
+colnames(sqnsim) <- pnames
+
+# flip sign and make positive
+psqnsim <- -sqnsim
+psqnsim <- psqnsim - min(psqnsim)
+
+# fit MDS
+mdfit1 <- smacofSym(psqnsim,2)
+plot(mdfit1)
+
+```
+
+The closer to people are in the figure above, the more similar the neural pattern they elicit. How can we tell if this configuration is a good fit for the data? The key statistic for assessing MDS fit is called "stress". It's a measure of how far each point is in the configuration relative to where it "should" be, given the input distance matrix. A typical rule of thumb is "stress > .15 = bad" but this is not really a good approach because stress depends heavily on the number of 'objects' in the distance matrix. Stress per point (SPP) is more helpful, as it can illustrate which particular points are ill-fit.
+
+```{r fig.height=8, fig.width=8}
+mdfit1$stress
+plot(mdfit1,plot.type="stressplot")
+
+```
+
+The overall stress of this configuration is pretty bad. Nancy Grace, Michael Jordan, Jimmy Fallon, and Bob Marley are particularly 'misplaced' in the configuration plot, relative to their actual neural similarity to other targets. Let's try to get a better fit! One way to do this is to relax the assumption that your similarity measure is a metric variable, and instead treat it as ordinal. 
+
+```{r fig.height=4, fig.width=8}
+
+# fit MDS
+mdfit2 <- smacofSym(psqnsim,2,"ordinal")
+mdfit2$stress
+
+# Shepard plots are another helpful visual diagnostic to examine fit
+layout(mat = t(matrix(c(1,2))))
+plot(mdfit1,plot.type="Shepard","Ratio fit")
+plot(mdfit2,plot.type="Shepard","Ordinal fit")
+```
+
+Unfortunately, switching to an ordinal MDS hasn't helped much - our data are just too high dimensional to reproduce their similarities on a 2-dimensional manifold! In a moment, we'll take a look at a different manifold-learning technique that might fair a bit better. However, let's first examine one nice addition to MDS: biplots. As I mentioned earlier, the axes of an MDS are arbitrary. Biplots are arrows added to an MDS which indicate the correlation of each dimension with the axes of the plot. They help to interpret the meaning behind the MDS plot.
+
+![A heavily embellished MDS, including biplots](http://markallenthornton.com/images/person-space.png)
+
+#### t-SNE 
+t-SNE, or t-distributed stochastic neighbor embedding, is another popular manifold learning/dimensionality reduction algorithm. Where MDS tries to preserve the global structure of the data, t-SNE ties to preserve the local structure. Thus long-range distances in an MDS configuration are quite meaningful, but you're not guaranteed to end up with true nearest-neighbors being represented as such in the configuration. In contrast, in t-SNE the long range distances don't mean much, but nearest neighbor structure will be preserved as much as possible.
+
+```{r fig.height=8, fig.width=8}
+
+# fit t-SNE and plot
+set.seed(1)
+tres <- Rtsne(as.dist(psqnsim),perplexity=4)
+plot(tres$Y,pch=20,xlab="",ylab="")
+text(tres$Y[,1],tres$Y[,2]+2,pnames,cex=.75)
+```
+
+You can see here that the results of t-SNE tend to look a bit more cluster-like. How much this is true depends on the "perplexity" parameter of the algorithm. This parameter can be difficult to set because different settings reveal different structure in the data. There is an excellent introduction to setting perplexity and interpreting t-SNE can be found [here](https://distill.pub/2016/misread-tsne/).
+
+#### Hierarchical clustering
+Clustering is another powerful technique for exploring similarity data. Clustering is a complex topic of its own, so we won't go into too much detail here, but let's take a quick look at one method: hierarchical clustering. It can take two main forms: agglomerative (bottom-up) merging of points into larger and larger cluster, and divisive (top-down) breaking of clusters eventually yielding individual points. Both forms operate directly on distance matrices rather than data matrices, and both yield the familiar tree-like structure of dendrograms. Agglomerative clustering tends to be faster and more common, so we'll focus on it. Hierarchical clustering is particularly valuable for data exploration because it pairs well with a powerful visualization technique - the dendrogram. 
+
+```{r fig.height=10, fig.width=8}
+
+hc <- hclust(as.dist(psqnsim),method = "ward.D2")
+plot(as.dendrogram(hc),horiz=T,xlim=c(4,-1))
+```
+
+## Conclusion
+
+Today we've learned how to conduct representational similarity analyses of fMRI data. First, we learned several methods for calculating the similarity between data objects. Next, we learned about RSA proper, including methods for NHST, effect sizes, cross-validation, and model selection. Finally, we learned about several techniques for exploring and visualizing similarity data, including multidimensional scaling, t-SNE, and hierarchical clustering. Together these methods should give you an excellent position from which to start analyzing neural similarity data!
+
+
