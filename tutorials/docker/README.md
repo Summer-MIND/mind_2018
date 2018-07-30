@@ -15,9 +15,12 @@ to the same tools
 - An application that runs Jupyter server so that you can access the same
 data and software without installing anything locally.
 
-# Getting Started
+# Getting started at MIND:
 
-+ Clone this repo: `git clone https://github.com/ContextLab/mind-tools`
++ Follow Eshin's instructions in the README found [here](https://github.com/Summer-MIND/mind-tools)
+
+
+# Getting Started on you own:
 
 + Install [Docker](https://www.docker.com/) and [Google Chrome](https://www.google.com/chrome/browser/desktop/index.html)
 
