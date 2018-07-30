@@ -15,7 +15,7 @@ to the same tools
 - An application that runs Jupyter server so that you can access the same
 data and software without installing anything locally.
 
-# Getting started at MIND:
+# Getting Started at MIND:
 
 + Follow Eshin's instructions in the README found [here](https://github.com/Summer-MIND/mind-tools)
 
@@ -25,11 +25,9 @@ data and software without installing anything locally.
 + Install [Docker](https://www.docker.com/) and [Google Chrome](https://www.google.com/chrome/browser/desktop/index.html)
 
 + Follow the instructions in Dockerfile_example. This file serves as a set of
-instructions for building a docker image.
+instructions for building a docker image. Best practices in writing a Dockerfile can be found [here](https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#run).  
 
-+ To build the docker image, make sure you have docker running, navigate to your
-local copy of this repo and execute the line: `docker build -t cdl .`. This will
-create a docker image from the instructions you specified in Dockerfile.
++ To build the docker image, make sure you have docker running, navigate to the directory that contains your Dockerfile and execute the line: `docker build -t cdl .`. This will create a docker image from the instructions you specified in Dockerfile.
 
 + Once the docker image builds, you can launch it by executing the following
 command: `docker run -it -p 9999:9999 --name CDL -v ~/Desktop:/mnt cdl`. To
