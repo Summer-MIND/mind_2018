@@ -1,4 +1,4 @@
-# MIND_tutorial_SNA_and_neural_sim
+# MIND tutorial on social networks and neural response similarities
 
 
 In this tutorial, we'll first go over some basics of working with and visualizing social network data (**1_social_network_basics.ipynb**). The first notebook uses the R kernel, but the other notebooks are Python-based.
