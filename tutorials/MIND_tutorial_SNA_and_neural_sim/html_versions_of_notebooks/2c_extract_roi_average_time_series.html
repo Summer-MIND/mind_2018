@@ -11775,9 +11775,13 @@ div#notebook {
 </div>
 <div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<h1 id="2c.-Extract-time-series-from-each-ROI">2c. Extract time series from each ROI<a class="anchor-link" href="#2c.-Extract-time-series-from-each-ROI">&#182;</a></h1><h4 id="Note:-This-notebook-is-created-just-for-the-purposes-of-following-along-and-possibly-using-as-a-reference-in-the-future,-since-many-of-you-won't-have-installed-AFNI-and-since-the-input-files-would-be-very-large-and-would-take-a-long-time-to-download.">Note: This notebook is created just for the purposes of following along and possibly using as a reference in the future, since many of you won't have installed AFNI and since the input files would be very large and would take a long time to download.<a class="anchor-link" href="#Note:-This-notebook-is-created-just-for-the-purposes-of-following-along-and-possibly-using-as-a-reference-in-the-future,-since-many-of-you-won't-have-installed-AFNI-and-since-the-input-files-would-be-very-large-and-would-take-a-long-time-to-download.">&#182;</a></h4><p>After preprocessing the EPI data and concatenating pre-processed data across runs, this script:</p>
+<h1 id="2c.-Extract-time-series-from-each-ROI">2c. Extract time series from each ROI<a class="anchor-link" href="#2c.-Extract-time-series-from-each-ROI">&#182;</a></h1><p><strong>Author: Carolyn Parkinson</strong></p>
+<p><strong>Email: <a href="mailto:cparkinson@ucla.edu">cparkinson@ucla.edu</a></strong></p>
+<p><strong>Lab website: <a href="http://csnlab.org">http://csnlab.org</a></strong></p>
+<p><strong>August 2018</strong></p>
+<h4 id="Note:-Notebooks-2a,-2b-and-2c-are-created-just-for-the-purposes-of-following-along-and-possibly-using-as-a-reference-in-the-future,-since-many-of-you-won't-have-installed-AFNI-and-since-the-input-files-would-be-very-large-and-would-take-a-long-time-to-download.">Note: Notebooks 2a, 2b and 2c are created just for the purposes of following along and possibly using as a reference in the future, since many of you won't have installed AFNI and since the input files would be very large and would take a long time to download.<a class="anchor-link" href="#Note:-Notebooks-2a,-2b-and-2c-are-created-just-for-the-purposes-of-following-along-and-possibly-using-as-a-reference-in-the-future,-since-many-of-you-won't-have-installed-AFNI-and-since-the-input-files-would-be-very-large-and-would-take-a-long-time-to-download.">&#182;</a></h4><p>After preprocessing the EPI data and concatenating pre-processed data across runs, this script:</p>
 <p>1) Averages the preprocessed time series across voxels within anatomical ROI</p>
-<p>2) Saves these average pre-processed time series for each ROI for each subject in a nested dictionary (<em>all_subj_roi_ts.json</em>) formatted like this:</p>
+<p>2) Saves these averaged pre-processed time series for each ROI for each subject in a nested dictionary (<em>all_subj_roi_ts.json</em>) formatted like this:</p>
 <p><em>all_ts_dict[subject_id][roi_label] = [t1, t2, ..., tn]</em></p>
 <p>It takes as input:</p>
 <ul>
@@ -11797,7 +11801,7 @@ file (<em>aparc+aseg_rank_Alnd_Exp+orig</em>), which is already in line with the
 </div>
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
-<div class="prompt input_prompt">In&nbsp;[1]:</div>
+<div class="prompt input_prompt">In&nbsp;[2]:</div>
 <div class="inner_cell">
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="kn">import</span> <span class="nn">os</span>
@@ -11901,7 +11905,7 @@ file (<em>aparc+aseg_rank_Alnd_Exp+orig</em>), which is already in line with the
     <span class="c1"># now make masks of cortical areas from Freesurfer parcellation </span>
     <span class="c1"># so that we can extract the average time series from each mask.</span>
 
-    <span class="c1"># get the total number of ROIs in this subject&#39;s parcellation file; this is</span>
+    <span class="c1"># Get the total number of ROIs in this subject&#39;s parcellation file; this is</span>
     <span class="c1"># 1 less than the length of the lookup table due to the file footer. The</span>
     <span class="c1"># length of different subjects&#39; lookup tables may vary a bit, as some</span>
     <span class="c1"># subjects have a 5th ventricle in the FreeSurfer subcortical segmentation;</span>
